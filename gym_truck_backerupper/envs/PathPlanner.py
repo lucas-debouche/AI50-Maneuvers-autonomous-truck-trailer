@@ -1,4 +1,7 @@
-import dubins
+try:
+    import dubins
+except ImportError:
+    from gym_truck_backerupper.envs import dubins_pure as dubins
 import matplotlib.pyplot as plt
 import numpy as np
 import os

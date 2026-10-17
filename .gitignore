@@ -1,2 +1,28 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
 *.egg
-/__pycache__
+*.egg-info/
+.eggs/
+dist/
+build/
+*.pth
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local outputs
+*.log
+dubins_path/
+*.png
+*.mp4
+.pytest_cache/
+.mypy_cache/

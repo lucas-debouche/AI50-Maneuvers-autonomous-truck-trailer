@@ -1,9 +1,7 @@
 import numpy as np
 import os
-import gym
-from gym import error, spaces
-from gym import utils
-from gym.utils import seeding
+import gymnasium as gym
+from gymnasium import spaces
 import scipy.integrate as spi
 from gym_truck_backerupper.envs.PathPlanner import PathPlanner
 import matplotlib.pyplot as plt
@@ -12,15 +10,15 @@ import random
 
 try:
     import dubins
-except ImportError as e:
-    raise error.DependencyNotInstalled(
-        "{}. (HINT: you can install Dubins by running 'pip3 install dubins')".format(e))
+except ImportError:
+    from gym_truck_backerupper.envs import dubins_pure as dubins
 
 class TruckBackerUpperEnv(gym.Env):
-    metadata = {'render.modes': ['human', 'rgb_array']}
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 12}
 
-    def __init__(self):
+    def __init__(self, render_mode=None):
         ''' '''
+        self.render_mode = render_mode
         self.min_x = -40.0
         self.min_y = -40.0
         self.max_x = 40.0
@@ -39,17 +37,23 @@ class TruckBackerUpperEnv(gym.Env):
         self.min_curv = -1.0 / self.turning_radius
  
         self.max_hitch = np.radians(90.0)
+        self.max_path_error = 5.0
+        self.max_heading_error = np.radians(45.0)
 
         self.min_action = -np.radians(45.0)
         self.max_action = np.radians(45.0)
 
-        self.low_state = np.array([self.min_psi_1, self.min_psi_2, self.min_y])
-        self.high_state = np.array([self.max_psi_1, self.max_psi_2, self.max_y])
-
-        self.action_space = spaces.Box(low=self.min_action,
-                                       high=self.max_action, shape=(1,))
-        self.observation_space = spaces.Box(low=self.low_state,
-                                            high=self.high_state)
+        # Observation = [tractor heading error, trailer heading error, trailer lateral error]
+        self.action_space = spaces.Box(
+            low=np.array([self.min_action], dtype=np.float32),
+            high=np.array([self.max_action], dtype=np.float32),
+            dtype=np.float32,
+        )
+        self.observation_space = spaces.Box(
+            low=np.array([-np.pi, -np.pi, -40.0], dtype=np.float32),
+            high=np.array([np.pi, np.pi, 40.0], dtype=np.float32),
+            dtype=np.float32,
+        )
         self.manual_track = False
         self.offset = False
         self.rendering = False
@@ -78,12 +82,13 @@ class TruckBackerUpperEnv(gym.Env):
         self.DCM = lambda ang: np.array([[np.cos(ang), np.sin(ang),  0], 
                                         [-np.sin(ang), np.cos(ang),  0],
                                         [     0     ,      0     ,   1]]) 
-        self.seed()
+        self.np_random = np.random.default_rng()
          
         self.H_c = self.L2 / 3.0
         self.H_t = self.L2 / 3.0
-        self.trail = 2.0 
-        self.fig, self.ax = plt.subplots(1, 1, figsize=(10, 10))
+        self.trail = 2.0
+        self.fig = None
+        self.ax = None
         
         self.DCM_g = lambda ang: np.array([[np.cos(ang), -np.sin(ang), 0], 
                                            [np.sin(ang), np.cos(ang),  0],
@@ -116,12 +121,11 @@ class TruckBackerUpperEnv(gym.Env):
 
         return xd
 
-    def seed(self, seed=None):
-        self.np_random, seed = seeding.np_random(seed)
-        return [seed]
-
-    def reset(self):
+    def reset(self, *, seed=None, options=None):
         ''' '''
+        super().reset(seed=seed)
+        if seed is not None:
+            self.np_random = np.random.default_rng(seed)
         self.u = 0
         self.goal_side = 1
         self.fin = False
@@ -138,17 +142,17 @@ class TruckBackerUpperEnv(gym.Env):
         self.min_psi = self.max_psi_1.copy()
 
         if self.manual_track == False: 
-            self.x_start = np.random.randint(self.min_x, self.max_x)
-            self.y_start = np.random.randint(self.min_y, self.max_y)
-            self.psi_start = np.radians(np.random.randint(
+            self.x_start = int(self.np_random.integers(self.min_x, self.max_x))
+            self.y_start = int(self.np_random.integers(self.min_y, self.max_y))
+            self.psi_start = np.radians(int(self.np_random.integers(
                                         np.degrees(self.min_psi_2), 
-                                        np.degrees(self.max_psi_2)))
+                                        np.degrees(self.max_psi_2))))
 
-            self.x_goal = np.random.randint(self.min_x, self.max_x)
-            self.y_goal = np.random.randint(self.min_y, self.max_y)
-            self.psi_goal = np.radians(np.random.randint(
+            self.x_goal = int(self.np_random.integers(self.min_x, self.max_x))
+            self.y_goal = int(self.np_random.integers(self.min_y, self.max_y))
+            self.psi_goal = np.radians(int(self.np_random.integers(
                                        np.degrees(self.min_psi_2),
-                                       np.degrees(self.max_psi_2)))
+                                       np.degrees(self.max_psi_2))))
 
             self.q0 = [self.x_start, self.y_start, self.psi_start]
             self.qg = [self.x_goal, self.y_goal, self.psi_goal]
@@ -164,17 +168,17 @@ class TruckBackerUpperEnv(gym.Env):
                 self.track_vector[:-105, 0:2])):
             #print('Dubins spawned out of bounds, respawning new track')
             if self.manual_track == False: 
-                self.x_start = np.random.randint(self.min_x, self.max_x)
-                self.y_start = np.random.randint(self.min_y, self.max_y)
-                self.psi_start = np.radians(np.random.randint(
+                self.x_start = int(self.np_random.integers(self.min_x, self.max_x))
+                self.y_start = int(self.np_random.integers(self.min_y, self.max_y))
+                self.psi_start = np.radians(int(self.np_random.integers(
                                             np.degrees(self.min_psi_2), 
-                                            np.degrees(self.max_psi_2)))
+                                            np.degrees(self.max_psi_2))))
 
-                self.x_goal = np.random.randint(self.min_x, self.max_x)
-                self.y_goal = np.random.randint(self.min_y, self.max_y)
-                self.psi_goal = np.radians(np.random.randint(
+                self.x_goal = int(self.np_random.integers(self.min_x, self.max_x))
+                self.y_goal = int(self.np_random.integers(self.min_y, self.max_y))
+                self.psi_goal = np.radians(int(self.np_random.integers(
                                            np.degrees(self.min_psi_2),
-                                           np.degrees(self.max_psi_2)))
+                                           np.degrees(self.max_psi_2))))
 
                 self.q0 = [self.x_start, self.y_start, self.psi_start]
                 self.qg = [self.x_goal, self.y_goal, self.psi_goal]
@@ -255,7 +259,12 @@ class TruckBackerUpperEnv(gym.Env):
         self.curv = np.zeros((self.num_steps))
 
         self.s = self.get_error(0)
-        return self.s
+        info = {
+            "goal": self.goal,
+            "jackknife": self.jackknife,
+            "out_of_bounds": self.out_of_bounds,
+        }
+        return self.s.astype(np.float32), info
 
     def manual_course(self, q0, qg):
         self.q0 = np.array([q0[0], q0[1], np.radians(q0[2])])
@@ -357,11 +366,11 @@ class TruckBackerUpperEnv(gym.Env):
                                                       self.y2[self.sim_i]],
                                         [self.track_vector[self.last_index, 0],
                                         self.track_vector[self.last_index, 1]])
-        if self.audit_error >= 5.0:
+        if self.audit_error >= self.max_path_error:
             done = True
             self.dist_too_large = True
 
-        if abs(self.s[1]) >= np.radians(45):
+        if abs(self.s[1]) >= self.max_heading_error:
             done = True
             self.angle_too_large = True
 
@@ -380,19 +389,34 @@ class TruckBackerUpperEnv(gym.Env):
         r -= 0.5 * (abs(self.s[1]) / np.radians(45)) ** 0.4 
         J = ((self.s.T).dot(self.Q).dot(self.s) + (a.T).dot(self.R).dot(a)) * self.dt 
         r -= J
-        
-        return self.s, r, done, {'goal' : self.goal, 'jackknife': self.jackknife,
-                                 'out_of_bounds' : self.out_of_bounds,
-                                 'times_up' : self.times_up, 'fin' : self.fin,
-                                 'min_d' : self.min_d, 
-                                 'min_psi' : self.min_psi,
-                                 'dist_too_large' : self.dist_too_large,
-                                 'angle_too_large' : self.angle_too_large,
-                                 't' : self.t[self.sim_i-1]}
 
-    def render(self, mode='human'):
+        terminated = bool(
+            done
+            and not self.times_up
+        )
+        truncated = bool(self.times_up)
+        if done and not terminated and not truncated:
+            terminated = True
+
+        info = {
+            "goal": self.goal,
+            "jackknife": self.jackknife,
+            "out_of_bounds": self.out_of_bounds,
+            "times_up": self.times_up,
+            "fin": self.fin,
+            "min_d": self.min_d,
+            "min_psi": self.min_psi,
+            "dist_too_large": self.dist_too_large,
+            "angle_too_large": self.angle_too_large,
+            "t": self.t[self.sim_i - 1],
+        }
+        return self.s.astype(np.float32), float(np.asarray(r).reshape(())), terminated, truncated, info
+
+    def render(self):
         ''' '''
         self.rendering = True
+        if self.fig is None or self.ax is None:
+            self.fig, self.ax = plt.subplots(1, 1, figsize=(10, 10))
         f = self.sim_i - 1
         
         ## Steering tyres
