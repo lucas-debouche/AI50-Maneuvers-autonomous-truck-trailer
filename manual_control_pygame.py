@@ -17,6 +17,9 @@ import gym_truck_backerupper  # noqa: F401
 import numpy as np
 import pygame
 
+import csv
+import os
+
 
 W, H = 900, 900
 SCALE = 11.0
@@ -88,6 +91,24 @@ def load_course(raw, course_idx: int, forward: bool):
     return name
 
 
+def save_demonstrations(rows):
+    if not rows:
+        return
+
+    filename = "demonstrations.csv"
+    file_exists = os.path.isfile(filename) and os.path.getsize(filename) > 0
+
+    with open(filename, "a", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=rows[0].keys())
+
+        if not file_exists:
+            writer.writeheader()
+
+        writer.writerows(rows)
+
+    print(f"{len(rows)} exemples sauvegardés dans {filename}")
+
+
 def main():
     pygame.init()
     screen = pygame.display.set_mode((W, H))
@@ -107,6 +128,8 @@ def main():
     running = True
     done = False
     max_steer = np.radians(MAX_STEER_DEG)
+    recording = False
+    recording_rows = []
 
     while running:
         dt = clock.tick(FPS) / 1000.0
@@ -150,6 +173,16 @@ def main():
                     steer = 0.0
                     total_reward = 0.0
                     done = False
+                elif event.key == pygame.K_e:   # Permet de démarrer ou d arrêter l enregistrement des démonstrations
+                    if not recording:
+                        recording = True
+                        recording_rows = []
+                        print("Enregistrement démarré.")
+                    else:
+                        recording = False
+                        save_demonstrations(recording_rows)
+                        recording_rows = []
+                        print("Enregistrement arrêté.")
 
         keys = pygame.key.get_pressed()
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
@@ -162,9 +195,45 @@ def main():
 
         if not done:
             for _ in range(PHYS_STEPS_PER_FRAME):
-                obs, reward, terminated, truncated, info = env.step(
-                    np.array([steer], dtype=np.float32)
-                )
+
+                # Observation avant l action
+                obs_before = np.asarray(
+                    obs, dtype=np.float32
+                ).reshape(-1).copy()
+
+                # Action choisie par le conducteur
+                action = np.array([steer], dtype=np.float32)
+
+                # Exécution de l action dans le simulateur
+                obs, reward, terminated, truncated, info = env.step(action)
+
+                total_reward += float(reward)
+                done = bool(terminated or truncated)
+
+                # Enregistrement de l exemple
+                if recording:
+                    obs_after = np.asarray(
+                        obs, dtype=np.float32
+                    ).reshape(-1).copy()
+
+                    recording_rows.append({
+                        "course": course_name,
+                        "direction": "avant" if forward else "arriere",
+                        "obs_tractor_heading_error": float(obs_before[0]),
+                        "obs_trailer_heading_error": float(obs_before[1]),
+                        "obs_trailer_lateral_error": float(obs_before[2]),
+                        "action_steer": float(action[0]),
+                        "reward": float(reward),
+                        "next_obs_tractor_heading_error": float(obs_after[0]),
+                        "next_obs_trailer_heading_error": float(obs_after[1]),
+                        "next_obs_trailer_lateral_error": float(obs_after[2]),
+                        "terminated": bool(terminated),
+                        "truncated": bool(truncated),
+                        "goal": bool(info.get("goal", False)),
+                    })
+
+                if done:
+                    break
                 total_reward += float(reward)
                 done = bool(terminated or truncated)
                 if done:
@@ -220,6 +289,9 @@ def main():
             y_txt += 22
 
         pygame.display.flip()
+
+    if recording_rows:
+        save_demonstrations(recording_rows)
 
     env.close()
     pygame.quit()
