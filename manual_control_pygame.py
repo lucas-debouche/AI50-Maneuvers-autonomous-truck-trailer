@@ -8,6 +8,9 @@ Controls:
   R : reset current track
   F : forward / reverse
   Esc/Q : quit
+  E : start recording a demonstration
+  V : validate and save the demonstration
+  X : abandon the demonstration
 """
 import math
 import sys
@@ -106,7 +109,7 @@ def save_demonstrations(rows):
 
         writer.writerows(rows)
 
-    print(f"{len(rows)} exemples sauvegardés dans {filename}")
+    print(f"{len(rows)} examples saved to {filename}")
 
 
 def main():
@@ -173,16 +176,34 @@ def main():
                     steer = 0.0
                     total_reward = 0.0
                     done = False
-                elif event.key == pygame.K_e:   # Permet de démarrer ou d arrêter l enregistrement des démonstrations
+                elif event.key == pygame.K_e: # Start recording demonstration
                     if not recording:
                         recording = True
                         recording_rows = []
-                        print("Enregistrement démarré.")
+                        print("Demonstration started.")
+                        print("V = validate | X = discard")
                     else:
+                        print("Finish the demonstration with V or discard it with X.")
+
+                elif event.key == pygame.K_v:
+                    if recording:
                         recording = False
                         save_demonstrations(recording_rows)
                         recording_rows = []
-                        print("Enregistrement arrêté.")
+                        print("Demonstration VALIDATED.")
+                    else:
+                        print("No demonstration in progress.")
+
+                elif event.key == pygame.K_x:
+                    if recording:
+                        recording = False
+                        print(
+                            f"Demonstration DISCARDED: "
+                            f"{len(recording_rows)} samples deleted."
+                        )
+                        recording_rows = []
+                    else:
+                        print("No demonstration in progress.")
 
         keys = pygame.key.get_pressed()
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
@@ -196,21 +217,21 @@ def main():
         if not done:
             for _ in range(PHYS_STEPS_PER_FRAME):
 
-                # Observation avant l action
+                # Observation before the action
                 obs_before = np.asarray(
                     obs, dtype=np.float32
                 ).reshape(-1).copy()
 
-                # Action choisie par le conducteur
+                # Action selected by the driver
                 action = np.array([steer], dtype=np.float32)
 
-                # Exécution de l action dans le simulateur
+                # Execute the action in the simulator
                 obs, reward, terminated, truncated, info = env.step(action)
 
                 total_reward += float(reward)
                 done = bool(terminated or truncated)
 
-                # Enregistrement de l exemple
+                # Record the example
                 if recording:
                     obs_after = np.asarray(
                         obs, dtype=np.float32
@@ -218,7 +239,7 @@ def main():
 
                     recording_rows.append({
                         "course": course_name,
-                        "direction": "avant" if forward else "arriere",
+                        "direction": "forward" if forward else "reverse",
                         "obs_tractor_heading_error": float(obs_before[0]),
                         "obs_trailer_heading_error": float(obs_before[1]),
                         "obs_trailer_lateral_error": float(obs_before[2]),
@@ -276,7 +297,8 @@ def main():
         lines = [
             f"{course_name} | {dir_txt} | reward {total_reward:7.1f}",
             f"steer {math.degrees(steer):+5.1f} deg | hitch {hitch:+5.1f} deg | done={done}",
-            "1/2/3 tracks | arrows steer | R reset | F fwd/rev | Q quit",
+            "1/2/3 tracks | arrows steer | R reset | F fwd/rev | Q quit ",
+            "E start recording | V validate | X abandon",
         ]
         if done and info:
             flags = [k for k, v in info.items() if v is True]
@@ -290,8 +312,8 @@ def main():
 
         pygame.display.flip()
 
-    if recording_rows:
-        save_demonstrations(recording_rows)
+    if recording and recording_rows:
+        print("Demonstration not validated.")
 
     env.close()
     pygame.quit()
