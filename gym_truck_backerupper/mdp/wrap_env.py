@@ -1,8 +1,6 @@
-# TODO : Wrap the MDP to the simulator
-
 import gymnasium as gym
 import numpy as np
-from mdp.truck_mdp import Snapshot, TruckMDP
+from gym_truck_backerupper.mdp.truck_mdp import Snapshot, TruckMDP
 
 
 class GymBackerUpperBackend:
@@ -32,6 +30,17 @@ class GymBackerUpperBackend:
                 "velocity": float(s.v1x),
                 "min_dist_goal": float(info.get("min_d", np.nan)),
                 "t": float(s.t[i]),
+            },
+            geometry={
+                "trailer_pose": (
+                    float(s.x2[i]),
+                    float(s.y2[i]),
+                    float(s.psi_2[i]),
+                ),
+                "path": s.track_vector,
+                "path_index": int(s.last_index),
+                "goal": np.asarray(s.qg[:3], dtype=float),
+                "goal_offset": float(s.trail),
             },
         )
 
