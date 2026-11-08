@@ -8,6 +8,9 @@ Controls:
   R : reset current track
   F : forward / reverse
   Esc/Q : quit
+  E : start recording a demonstration
+  V : validate and save the demonstration
+  X : abandon the demonstration
 """
 import math
 import sys
@@ -16,6 +19,9 @@ import gymnasium as gym
 import gym_truck_backerupper  # noqa: F401
 import numpy as np
 import pygame
+
+import csv
+import os
 
 
 W, H = 900, 900
@@ -88,6 +94,24 @@ def load_course(raw, course_idx: int, forward: bool):
     return name
 
 
+def save_demonstrations(rows):
+    if not rows:
+        return
+
+    filename = "demonstrations.csv"
+    file_exists = os.path.isfile(filename) and os.path.getsize(filename) > 0
+
+    with open(filename, "a", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=rows[0].keys())
+
+        if not file_exists:
+            writer.writeheader()
+
+        writer.writerows(rows)
+
+    print(f"{len(rows)} examples saved to {filename}")
+
+
 def main():
     pygame.init()
     screen = pygame.display.set_mode((W, H))
@@ -107,6 +131,8 @@ def main():
     running = True
     done = False
     max_steer = np.radians(MAX_STEER_DEG)
+    recording = False
+    recording_rows = []
 
     while running:
         dt = clock.tick(FPS) / 1000.0
@@ -150,6 +176,34 @@ def main():
                     steer = 0.0
                     total_reward = 0.0
                     done = False
+                elif event.key == pygame.K_e: # Start recording demonstration
+                    if not recording:
+                        recording = True
+                        recording_rows = []
+                        print("Demonstration started.")
+                        print("V = validate | X = discard")
+                    else:
+                        print("Finish the demonstration with V or discard it with X.")
+
+                elif event.key == pygame.K_v:
+                    if recording:
+                        recording = False
+                        save_demonstrations(recording_rows)
+                        recording_rows = []
+                        print("Demonstration VALIDATED.")
+                    else:
+                        print("No demonstration in progress.")
+
+                elif event.key == pygame.K_x:
+                    if recording:
+                        recording = False
+                        print(
+                            f"Demonstration DISCARDED: "
+                            f"{len(recording_rows)} samples deleted."
+                        )
+                        recording_rows = []
+                    else:
+                        print("No demonstration in progress.")
 
         keys = pygame.key.get_pressed()
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
@@ -162,9 +216,45 @@ def main():
 
         if not done:
             for _ in range(PHYS_STEPS_PER_FRAME):
-                obs, reward, terminated, truncated, info = env.step(
-                    np.array([steer], dtype=np.float32)
-                )
+
+                # Observation before the action
+                obs_before = np.asarray(
+                    obs, dtype=np.float32
+                ).reshape(-1).copy()
+
+                # Action selected by the driver
+                action = np.array([steer], dtype=np.float32)
+
+                # Execute the action in the simulator
+                obs, reward, terminated, truncated, info = env.step(action)
+
+                total_reward += float(reward)
+                done = bool(terminated or truncated)
+
+                # Record the example
+                if recording:
+                    obs_after = np.asarray(
+                        obs, dtype=np.float32
+                    ).reshape(-1).copy()
+
+                    recording_rows.append({
+                        "course": course_name,
+                        "direction": "forward" if forward else "reverse",
+                        "obs_tractor_heading_error": float(obs_before[0]),
+                        "obs_trailer_heading_error": float(obs_before[1]),
+                        "obs_trailer_lateral_error": float(obs_before[2]),
+                        "action_steer": float(action[0]),
+                        "reward": float(reward),
+                        "next_obs_tractor_heading_error": float(obs_after[0]),
+                        "next_obs_trailer_heading_error": float(obs_after[1]),
+                        "next_obs_trailer_lateral_error": float(obs_after[2]),
+                        "terminated": bool(terminated),
+                        "truncated": bool(truncated),
+                        "goal": bool(info.get("goal", False)),
+                    })
+
+                if done:
+                    break
                 total_reward += float(reward)
                 done = bool(terminated or truncated)
                 if done:
@@ -207,7 +297,8 @@ def main():
         lines = [
             f"{course_name} | {dir_txt} | reward {total_reward:7.1f}",
             f"steer {math.degrees(steer):+5.1f} deg | hitch {hitch:+5.1f} deg | done={done}",
-            "1/2/3 tracks | arrows steer | R reset | F fwd/rev | Q quit",
+            "1/2/3 tracks | arrows steer | R reset | F fwd/rev | Q quit ",
+            "E start recording | V validate | X abandon",
         ]
         if done and info:
             flags = [k for k, v in info.items() if v is True]
@@ -220,6 +311,9 @@ def main():
             y_txt += 22
 
         pygame.display.flip()
+
+    if recording and recording_rows:
+        print("Demonstration not validated.")
 
     env.close()
     pygame.quit()
