@@ -30,7 +30,7 @@ Each episode is represented by a `TrainingEpisodeRecord`:
 ### Import
 
 ```python
-from training_metrics import TrainingMetricsDirectory, TrainingEpisodeRecord
+from metrics import TrainingMetricsDirectory, TrainingEpisodeRecord
 ```
 
 ### Create a metrics directory
