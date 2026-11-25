@@ -193,7 +193,7 @@ class TruckMDP:
         # Terminal rewards
         if snap.success:
             r += c.r_success
-        elif snap.jackknife or snap.out_of_bounds or snap.off_track:
+        elif snap.terminated:
             r += c.r_failure
         elif snap.truncated:
             r += c.r_timeout
