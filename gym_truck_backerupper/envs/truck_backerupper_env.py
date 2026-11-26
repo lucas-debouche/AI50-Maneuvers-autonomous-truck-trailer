@@ -158,30 +158,47 @@ class TruckBackerUpperEnv(gym.Env):
             self.qg = [self.x_goal, self.y_goal, self.psi_goal]
 
         self.track_vector = self.path_planner.generate(self.q0, self.qg)
-        
-        while (max(self.track_vector[:, 0]) >= self.max_x - 10.192 or
-            min(self.track_vector[:, 0]) <= self.min_x + 10.192 or
-            max(self.track_vector[:, 1]) >= self.max_y - 10.192 or
-            min(self.track_vector[:, 1]) <= self.min_y + 10.192 or 
-            any(self.path_planner.distance(pt, [self.track_vector[-1, 0],
-                self.track_vector[-1, 1]]) <= 5.0 for pt in \
-                self.track_vector[:-105, 0:2])):
+
+        def _track_invalid(track):
+            return (
+                max(track[:, 0]) >= self.max_x - 10.192 or
+                min(track[:, 0]) <= self.min_x + 10.192 or
+                max(track[:, 1]) >= self.max_y - 10.192 or
+                min(track[:, 1]) <= self.min_y + 10.192 or
+                (
+                    len(track) > 105 and
+                    any(
+                        self.path_planner.distance(
+                            pt, [track[-1, 0], track[-1, 1]]
+                        ) <= 5.0
+                        for pt in track[:-105, 0:2]
+                    )
+                )
+            )
+
+        # Manual courses must be valid: regenerating the same q0/qg forever freezes the app
+        if self.manual_track and _track_invalid(self.track_vector):
+            raise ValueError(
+                "Manual track is out of bounds or invalid. "
+                f"q0={self.q0}, qg={self.qg}"
+            )
+
+        while _track_invalid(self.track_vector):
             #print('Dubins spawned out of bounds, respawning new track')
-            if self.manual_track == False: 
-                self.x_start = int(self.np_random.integers(self.min_x, self.max_x))
-                self.y_start = int(self.np_random.integers(self.min_y, self.max_y))
-                self.psi_start = np.radians(int(self.np_random.integers(
-                                            np.degrees(self.min_psi_2), 
-                                            np.degrees(self.max_psi_2))))
+            self.x_start = int(self.np_random.integers(self.min_x, self.max_x))
+            self.y_start = int(self.np_random.integers(self.min_y, self.max_y))
+            self.psi_start = np.radians(int(self.np_random.integers(
+                                        np.degrees(self.min_psi_2),
+                                        np.degrees(self.max_psi_2))))
 
-                self.x_goal = int(self.np_random.integers(self.min_x, self.max_x))
-                self.y_goal = int(self.np_random.integers(self.min_y, self.max_y))
-                self.psi_goal = np.radians(int(self.np_random.integers(
-                                           np.degrees(self.min_psi_2),
-                                           np.degrees(self.max_psi_2))))
+            self.x_goal = int(self.np_random.integers(self.min_x, self.max_x))
+            self.y_goal = int(self.np_random.integers(self.min_y, self.max_y))
+            self.psi_goal = np.radians(int(self.np_random.integers(
+                                       np.degrees(self.min_psi_2),
+                                       np.degrees(self.max_psi_2))))
 
-                self.q0 = [self.x_start, self.y_start, self.psi_start]
-                self.qg = [self.x_goal, self.y_goal, self.psi_goal]
+            self.q0 = [self.x_start, self.y_start, self.psi_start]
+            self.qg = [self.x_goal, self.y_goal, self.psi_goal]
 
             self.track_vector = self.path_planner.generate(self.q0, self.qg)
             
@@ -331,9 +348,21 @@ class TruckBackerUpperEnv(gym.Env):
             self.out_of_bounds = True
             done = True
 
-        t_x, t_y, _ = np.array([self.x2[self.sim_i], self.y2[self.sim_i], 1]).T + \
-                               self.DCM_g(self.psi_2[self.sim_i]).dot(
-                               np.array([-self.trail, 0, 1]).T)
+        # Point that should meet the dock (red line):
+        # - reverse: trailer rear bumper (classic truck backer-upper)
+        # - forward: front of the tractor head (otherwise the cab crosses first)
+        if self.v1x < 0:
+            t_x, t_y, _ = np.array(
+                [self.x2[self.sim_i], self.y2[self.sim_i], 1]
+            ).T + self.DCM_g(self.psi_2[self.sim_i]).dot(
+                np.array([-self.trail, 0, 1]).T
+            )
+        else:
+            t_x, t_y, _ = np.array(
+                [self.x1[self.sim_i], self.y1[self.sim_i], 1]
+            ).T + self.DCM_g(self.psi_1[self.sim_i]).dot(
+                np.array([float(self.L1), 0, 1]).T
+            )
         d_goal =  self.path_planner.distance(self.qg[0:2], 
                                              [t_x, 
                                               t_y])
