@@ -39,6 +39,9 @@ class TruckBackerUpperEnv(gym.Env):
         self.max_hitch = np.radians(90.0)
         self.max_path_error = 5.0
         self.max_heading_error = np.radians(45.0)
+        # Success tolerances at the dock (manual demos need realistic margins)
+        self.goal_dist_tol = 1.5           # meters
+        self.goal_heading_tol = np.radians(20.0)  # ~20°
 
         self.min_action = -np.radians(45.0)
         self.max_action = np.radians(45.0)
@@ -138,6 +141,7 @@ class TruckBackerUpperEnv(gym.Env):
         self.jackknife = False
         self.out_of_bounds = False
         self.times_up = False
+        self.stop_reason = ""
         self.min_d = self.max_x - self.min_x
         self.min_psi = self.max_psi_1.copy()
 
@@ -331,22 +335,25 @@ class TruckBackerUpperEnv(gym.Env):
         if self.theta > self.max_hitch:
             self.jackknife = True
             done = True
+            self.stop_reason = "jackknife"
         elif self.theta < -self.max_hitch:
             self.jackknife = True
             done = True
+            self.stop_reason = "jackknife"
         else:
             self.jackknife = False
 
         if (self.x1[self.sim_i] >= self.max_x or
             self.x1[self.sim_i] <= self.min_x or
             self.x2[self.sim_i] >= self.max_x or
-            self.x2[self.sim_i] <= self.min_y or
+            self.x2[self.sim_i] <= self.min_x or
             self.y1[self.sim_i] >= self.max_y or
             self.y1[self.sim_i] <= self.min_y or
             self.y2[self.sim_i] >= self.max_y or
             self.y2[self.sim_i] <= self.min_y):
             self.out_of_bounds = True
             done = True
+            self.stop_reason = "out_of_bounds"
 
         # Point that should meet the dock (red line):
         # - reverse: trailer rear bumper (classic truck backer-upper)
@@ -372,7 +379,19 @@ class TruckBackerUpperEnv(gym.Env):
             self.min_d = d_goal.copy()
             self.min_psi = psi_goal.copy()
          
-        if d_goal < 5.0 and abs(psi_goal) < np.radians(45):
+        # Success = currently close enough + well aligned at the dock target
+        self.goal = bool(
+            d_goal <= self.goal_dist_tol
+            and abs(psi_goal) <= self.goal_heading_tol
+        )
+        if self.goal:
+            done = True
+            self.fin = True
+            self.stop_reason = "success"
+
+        # Crossing the infinite dock line only counts when already near the target.
+        # Otherwise a sideways crossing far from qg would stop the episode too early.
+        elif d_goal < 5.0 and abs(psi_goal) < np.radians(45):
             self.goal_side = ((self.dock_y[0] - self.dock_y[-1]) * \
                              (self.track_vector[-100, 0] - self.dock_x[0]) + \
                              (self.dock_x[-1] - self.dock_x[0]) * \
@@ -381,12 +400,15 @@ class TruckBackerUpperEnv(gym.Env):
                              (t_x - self.dock_x[0]) + \
                              (self.dock_x[-1] - self.dock_x[0]) * \
                              (t_y - self.dock_y[0]))
-            if self.goal_side < 0 and self.t[self.sim_i] > 5.0:
-                done = True
+            near_dock = d_goal <= max(2.0, 2.0 * self.goal_dist_tol)
+            if (
+                self.goal_side < 0
+                and self.t[self.sim_i] > 5.0
+                and near_dock
+            ):
                 self.fin = True
-
-        self.goal = bool(self.min_d <= 0.15 and abs(self.min_psi) <= 0.1 
-                         and self.fin)       
+                done = True
+                self.stop_reason = "dock_miss"       
         
         self.s = self.get_error(self.sim_i)
          
@@ -398,15 +420,18 @@ class TruckBackerUpperEnv(gym.Env):
         if self.audit_error >= self.max_path_error:
             done = True
             self.dist_too_large = True
+            self.stop_reason = "dist_too_large"
 
         if abs(self.s[1]) >= self.max_heading_error:
             done = True
             self.angle_too_large = True
+            self.stop_reason = "angle_too_large"
 
         self.sim_i += 1
         if self.sim_i >= self.num_steps:
             self.times_up = True
             done = True
+            self.stop_reason = "times_up"
  
         r = self.goal * 100 - self.jackknife * 100 \
             - self.out_of_bounds * 100 - self.times_up * 100 \
@@ -437,6 +462,7 @@ class TruckBackerUpperEnv(gym.Env):
             "min_psi": self.min_psi,
             "dist_too_large": self.dist_too_large,
             "angle_too_large": self.angle_too_large,
+            "stop_reason": self.stop_reason,
             "t": self.t[self.sim_i - 1],
         }
         return self.s.astype(np.float32), float(np.asarray(r).reshape(())), terminated, truncated, info

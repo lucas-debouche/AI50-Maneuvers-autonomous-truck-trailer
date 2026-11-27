@@ -132,8 +132,13 @@ def apply_easy_params(sim, forward: bool):
     sim.H_c = sim.L2 / 3.0
     sim.H_t = sim.L2 / 3.0
     sim.max_hitch = np.radians(110.0)
-    sim.max_path_error = 12.0
-    sim.max_heading_error = np.radians(70.0)
+    sim.max_path_error = 16.0
+    sim.max_heading_error = np.radians(85.0)
+    sim.goal_dist_tol = 1.5
+    sim.goal_heading_tol = np.radians(20.0)
+    # More time for slow manual demos (~60 m paths at 0.35 m/s need >160 s)
+    sim.t_final = 360.0
+    sim.num_steps = int((sim.t_final - sim.t0) / sim.dt) + 1
     sim.manual_velocity(DEFAULT_SPEED if forward else -DEFAULT_SPEED)
     sim.manual_offset(0.0, 0.0, 0.0)
 
@@ -162,6 +167,41 @@ def next_episode_id(filename: str = DEMO_FILE) -> int:
         reader = csv.DictReader(file)
         ids = [int(row["episode_id"]) for row in reader if row.get("episode_id")]
     return (max(ids) + 1) if ids else 1
+
+
+_STOP_MESSAGES = {
+    "success": "SUCCESS — dock reached",
+    "dock_miss": "crossed dock near target but not precise enough (goal=no)",
+    "jackknife": "jackknife (trailer folded too much)",
+    "out_of_bounds": "out of bounds",
+    "dist_too_large": "too far from the blue path",
+    "angle_too_large": "trailer heading error too large",
+    "times_up": "time limit",
+}
+
+
+def stop_reason(info: dict, sim) -> str:
+    """Human-readable reason why the episode ended."""
+    code = str(info.get("stop_reason") or getattr(sim, "stop_reason", "") or "")
+    if code in _STOP_MESSAGES:
+        return _STOP_MESSAGES[code]
+    if info.get("success") or getattr(sim, "goal", False):
+        return _STOP_MESSAGES["success"]
+    if info.get("jackknife") or getattr(sim, "jackknife", False):
+        return _STOP_MESSAGES["jackknife"]
+    if info.get("out_of_bounds") or getattr(sim, "out_of_bounds", False):
+        return _STOP_MESSAGES["out_of_bounds"]
+    if info.get("dist_too_large") or getattr(sim, "dist_too_large", False):
+        return _STOP_MESSAGES["dist_too_large"]
+    if info.get("angle_too_large") or getattr(sim, "angle_too_large", False):
+        return _STOP_MESSAGES["angle_too_large"]
+    if info.get("times_up") or getattr(sim, "times_up", False):
+        return _STOP_MESSAGES["times_up"]
+    if info.get("fin") or getattr(sim, "fin", False):
+        return _STOP_MESSAGES["dock_miss"]
+    if info.get("off_track"):
+        return "off track"
+    return "episode ended"
 
 
 def save_demonstrations(rows, episode_id: int):
@@ -390,9 +430,13 @@ def main():
 
         hitch = math.degrees(((psi1 - psi2 + math.pi) % (2 * math.pi)) - math.pi)
         dir_txt = "FORWARD" if forward else "REVERSE"
+        min_d = float(getattr(sim, "min_d", float("nan")))
+        min_psi_deg = math.degrees(float(getattr(sim, "min_psi", 0.0)))
         lines = [
-            f"{course_name} | {dir_txt} | reward {total_reward:7.1f} | MDP 15D",
+            f"{course_name} | {dir_txt} | reward {total_reward:7.1f}",
             f"steer {math.degrees(steer):+5.1f} deg | hitch {hitch:+5.1f} deg | done={done}",
+            f"best dock: dist {min_d:.2f} m | angle {min_psi_deg:+.1f} deg "
+            f"(need <= {sim.goal_dist_tol:.2f} m / {math.degrees(sim.goal_heading_tol):.0f} deg)",
             "1/2/3 tracks | arrows steer | R reset | F fwd/rev | Q quit",
             "E start recording | V validate (goal only) | X abandon",
         ]
@@ -402,10 +446,9 @@ def main():
                 f"REC episode {episode_id} | samples {len(recording_rows)} | "
                 f"goal={'YES' if reached_goal else 'no'}",
             )
-        if done and info:
-            flags = [k for k, v in info.items() if v is True]
-            if flags:
-                lines.append("end: " + ", ".join(flags))
+        if done:
+            reason = stop_reason(info if isinstance(info, dict) else {}, sim)
+            lines.append(f"STOP: {reason}")
 
         y_txt = 12
         for line in lines:

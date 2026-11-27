@@ -29,7 +29,13 @@ class GymBackerUpperBackend:
                 "steering": float(np.asarray(s.u).ravel()[0]),
                 "velocity": float(s.v1x),
                 "min_dist_goal": float(info.get("min_d", np.nan)),
+                "min_psi_goal": float(info.get("min_psi", np.nan)),
                 "t": float(s.t[i]),
+                "fin": bool(info.get("fin", False)),
+                "dist_too_large": bool(info.get("dist_too_large", False)),
+                "angle_too_large": bool(info.get("angle_too_large", False)),
+                "times_up": bool(info.get("times_up", False)),
+                "stop_reason": str(info.get("stop_reason", "")),
             },
             geometry={
                 "trailer_pose": (
